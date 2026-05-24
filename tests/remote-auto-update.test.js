@@ -78,14 +78,14 @@ function makeRemoteReleaseTarball(baseDir) {
 
   writeFile(path.join(root, 'install.sh'), `#!/usr/bin/env bash
 set -euo pipefail
-if [ "${1:-}" != "--update-only" ]; then
+if [ "\${1:-}" != "--update-only" ]; then
   echo "expected --update-only" >&2
   exit 45
 fi
-printf 'updated from %s with args %s\n' "${ZH_CN_SOURCE_REPO:-}" "$*" >> "$TEST_UPDATE_MARKER"
+printf 'updated from %s with args %s\n' "\${ZH_CN_SOURCE_REPO:-}" "$*" >> "$TEST_UPDATE_MARKER"
 mkdir -p "$CLAUDE_PLUGIN_ROOT"
 printf '{"version":"2.0.0"}\n' > "$CLAUDE_PLUGIN_ROOT/manifest.json"
-printf '%s\n' "${ZH_CN_SOURCE_REPO:-}" > "$CLAUDE_PLUGIN_ROOT/.source-repo"
+printf '%s\n' "\${ZH_CN_SOURCE_REPO:-}" > "$CLAUDE_PLUGIN_ROOT/.source-repo"
 `, 0o755);
   writeFile(path.join(root, 'install.ps1'), '# fake powershell installer\n');
   writeFile(path.join(root, 'settings-overlay.json'), '{}\n');
@@ -127,7 +127,7 @@ function makeEnv(baseDir, pluginRoot, tarball) {
     ...process.env,
     HOME: home,
     TMPDIR: tmp,
-    PATH: [fakeBin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'),
+    PATH: [fakeBin, process.env.PATH].filter(Boolean).join(':'),
     CLAUDE_PLUGIN_ROOT: pluginRoot,
     ZH_CN_UPDATE_CHECK_INTERVAL_SECONDS: '0',
     ZH_CN_LAUNCHER_BIN_DIR: path.join(baseDir, 'missing-launcher-bin'),
