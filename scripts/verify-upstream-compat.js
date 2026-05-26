@@ -44,6 +44,7 @@ function parseArgs(argv) {
     json: false,
     skipLatest: false,
     nativeMacosArm64: false,
+    nativeWindowsX64: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -72,6 +73,9 @@ function parseArgs(argv) {
         break;
       case "--native-macos-arm64":
         args.nativeMacosArm64 = true;
+        break;
+      case "--native-windows-x64":
+        args.nativeWindowsX64 = true;
         break;
       case "--json":
         args.json = true;
@@ -256,8 +260,23 @@ function compareSemver(a, b) {
   return 0;
 }
 
+function nativeSupportConfig(config, args) {
+  if (args.nativeWindowsX64) {
+    return config.support?.windowsNativeExperimental || null;
+  }
+  if (args.nativeMacosArm64) {
+    return config.support?.macosNativeExperimental || null;
+  }
+  return null;
+}
+
 function resolveVersions(config, args) {
-  const baseline = parseBaselineOverride(args.baseline) || config.baseline.versions;
+  const nativeConfig = nativeSupportConfig(config, args);
+  const nativeBaseline =
+    nativeConfig && nativeConfig.unsupported !== true && Array.isArray(nativeConfig.representatives)
+      ? nativeConfig.representatives
+      : null;
+  const baseline = parseBaselineOverride(args.baseline) || nativeBaseline || config.baseline.versions;
   const versions = uniqueVersions(baseline);
 
   if (args.skipLatest) {
@@ -306,6 +325,10 @@ function downloadedPackageShapeError(packageDir) {
     return null;
   }
 
+  if (fs.existsSync(path.join(packageDir, "claude.exe"))) {
+    return null;
+  }
+
   if (fs.existsSync(path.join(packageDir, "bin", "claude.exe"))) {
     return null;
   }
@@ -332,8 +355,7 @@ function downloadPackage(packageName, version, packagesDir) {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 
-  const tarCwd = isWindows ? versionRoot.replace(/\\/g, "/").replace(/^([A-Z]):/, "/$1") : versionRoot;
-  execFile("tar", ["-xzf", tarball, "-C", tarCwd], {
+  execFile("tar", ["-xzf", tarball, "-C", "."], {
     cwd: versionRoot,
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -351,8 +373,8 @@ function downloadPackage(packageName, version, packagesDir) {
 }
 
 function resolvePackageName(config, args, version) {
-  const nativeConfig = config.support?.macosNativeExperimental;
-  if (args.nativeMacosArm64 && nativeConfig?.packageName) {
+  const nativeConfig = nativeSupportConfig(config, args);
+  if ((args.nativeMacosArm64 || args.nativeWindowsX64) && nativeConfig?.packageName) {
     const floorComparison = nativeConfig.floor ? compareSemver(version, nativeConfig.floor) : null;
     const isKnownRepresentative = (nativeConfig.representatives || []).map(String).includes(String(version));
     if ((floorComparison !== null && floorComparison >= 0) || isKnownRepresentative) {
@@ -394,6 +416,10 @@ function classifyPackage(packageDir) {
   }
 
   if (fs.existsSync(path.join(packageDir, "claude"))) {
+    return "native";
+  }
+
+  if (fs.existsSync(path.join(packageDir, "claude.exe"))) {
     return "native";
   }
 
@@ -447,11 +473,15 @@ function checkNativeDeps() {
 }
 
 function runNativeVerification(config, args, version, packageDir, kind) {
-  if (!args.nativeMacosArm64) {
+  if (!args.nativeMacosArm64 && !args.nativeWindowsX64) {
     return nativeSkipResult(version, kind, "native verification not enabled");
   }
 
-  if (currentNativePlatform() !== "darwin-arm64") {
+  const expectedPlatform = args.nativeWindowsX64 ? "win32-x64" : "darwin-arm64";
+  if (currentNativePlatform() !== expectedPlatform) {
+    if (args.nativeWindowsX64) {
+      return nativeSkipResult(version, kind, "native verification requires Windows x64");
+    }
     return nativeSkipResult(version, kind, "native verification requires macOS arm64");
   }
 
@@ -466,14 +496,18 @@ function runNativeVerification(config, args, version, packageDir, kind) {
     return nativeSkipResult(version, kind, "node-lief dependency missing");
   }
 
-  if (kind !== "native") {
-    return nativeSkipResult(version, kind, "native verification requires platform package with package/claude");
+  const canVerifyNativePackage = kind === "native" || (args.nativeWindowsX64 && kind === "native-wrapper");
+  if (!canVerifyNativePackage) {
+    return nativeSkipResult(version, kind, "native verification requires platform package");
   }
 
-  const binaryPath = path.join(packageDir, "claude");
+  const windowsRootBinary = path.join(packageDir, "claude.exe");
+  const binaryPath = args.nativeWindowsX64
+    ? (fs.existsSync(windowsRootBinary) ? windowsRootBinary : path.join(packageDir, "bin", "claude.exe"))
+    : path.join(packageDir, "claude");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-native-compat-"));
   const extractedJs = path.join(tmpDir, "extracted.js");
-  const patchedBinary = path.join(tmpDir, "claude-patched");
+  const patchedBinary = path.join(tmpDir, args.nativeWindowsX64 ? "claude-patched.exe" : "claude-patched");
 
   try {
     const detectOutput = execFile("node", [binaryIoPath, "detect", binaryPath], {
@@ -483,7 +517,13 @@ function runNativeVerification(config, args, version, packageDir, kind) {
     }).trim();
 
     if (!detectOutput.startsWith("native-bun:")) {
-      return nativeFailResult(version, kind, `native detect returned ${detectOutput || "empty"}`);
+      return nativeFailResult(version, kind, `native detect returned ${detectOutput || "empty"}`, {
+        nativeVerification: {
+          packageName: resolvePackageName(config, args, version),
+          platform: expectedPlatform,
+          detect: detectOutput || "empty",
+        },
+      });
     }
 
     execFile("node", [binaryIoPath, "extract", binaryPath, extractedJs], {
@@ -508,10 +548,12 @@ function runNativeVerification(config, args, version, packageDir, kind) {
       cwd: repoRoot,
       stdio: ["ignore", "ignore", "pipe"],
     });
-    execFile("codesign", ["--verify", "--strict", "--verbose=4", patchedBinary], {
-      cwd: repoRoot,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    if (!args.nativeWindowsX64) {
+      execFile("codesign", ["--verify", "--strict", "--verbose=4", patchedBinary], {
+        cwd: repoRoot,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+    }
 
     const tempHome = path.join(tmpDir, "home");
     fs.mkdirSync(tempHome, { recursive: true });
@@ -554,7 +596,7 @@ function runNativeVerification(config, args, version, packageDir, kind) {
       missingRequired,
       nativeVerification: {
         packageName: resolvePackageName(config, args, version),
-        platform: "darwin-arm64",
+        platform: expectedPlatform,
         detect: detectOutput.split(":")[0],
         extract: "ok",
         repack: "ok",
@@ -567,7 +609,7 @@ function runNativeVerification(config, args, version, packageDir, kind) {
     return nativeFailResult(version, kind, compactError(error), {
       nativeVerification: {
         packageName: resolvePackageName(config, args, version),
-        platform: "darwin-arm64",
+        platform: expectedPlatform,
       },
     });
   }

@@ -224,6 +224,9 @@ test("Windows PowerShell old-npm install smoke is wired into CI", () => {
     /node --test tests\/install-smoke\.test\.js/,
     "CI should run the install smoke on the Windows runner"
   );
+  assert.match(workflow, /windows-native-compat/, "CI should include a Windows native compat lane");
+  assert.match(workflow, /--native-windows-x64/, "CI should verify Windows native patching");
+  assert.match(workflow, /npm install --no-save node-lief/, "Windows native compat should install node-lief");
 });
 
 test("install.ps1 gates launcher injection to Windows old npm cli.js installs", () => {
@@ -240,6 +243,19 @@ test("install.ps1 gates launcher injection to Windows old npm cli.js installs", 
   assert.match(script, /detect-launcher-install \$realClaude/);
   assert.match(script, /\$kind -ne "npm"/);
   assert.doesNotMatch(launcherDetector, /npm root -g/, "launcher gating must not use global npm fallback");
+});
+
+test("install.ps1 gates Windows native patch through support window and node-lief", () => {
+  const script = fs.readFileSync(path.join(repoRoot, "install.ps1"), "utf8");
+
+  assert.match(script, /function patch-native-bun/);
+  assert.match(script, /windowsNativeExperimental/);
+  assert.match(script, /is-supported-windows-native-version/);
+  assert.match(script, /node \$helper check-deps/);
+  assert.match(script, /node \$helper extract \$BinaryPath \$tmpJs/);
+  assert.match(script, /node \$helper repack \$BinaryPath \$tmpJs/);
+  assert.match(script, /\.patched-version/);
+  assert.doesNotMatch(script, /Windows PE 二进制暂不支持 patch/);
 });
 
 test(
@@ -310,7 +326,7 @@ test(
     const output = `${result.stdout}\n${result.stderr}`;
     assert.equal(result.status, 0, output);
     assert.match(output, /原生二进制/, output);
-    assert.match(output, /暂不支持 patch/, output);
+    assert.match(output, /暂不支持 (?:CLI )?Patch/i, output);
     assert.equal(fs.existsSync(path.join(launcherBin, "claude.cmd")), false, "unsupported native exe must not install launcher");
     assert.equal(fs.existsSync(path.join(launcherBin, "claude.ps1")), false, "unsupported native exe must not install launcher");
     assert.equal(fs.existsSync(markerFile), false, "unsupported native exe must not write a success marker");

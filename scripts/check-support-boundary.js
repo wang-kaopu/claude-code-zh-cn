@@ -85,13 +85,21 @@ function isNegatedBoundaryLine(line) {
 }
 
 function isAllowedNativeExperimentalLine(line) {
-  const mentionsMacos = /macOS|darwin/i.test(line);
+  const mentionsPlatform = /macOS|darwin|Windows|win32/i.test(line);
   const mentionsNative = /native|原生|二进制|binary/i.test(line);
   const experimental = /experimental|实验/i.test(line);
   const stableClaim = /\bstable\b|稳定支持|stable CLI Patch/i.test(line);
   const latestClaim = /\blatest\b|最新版|最新版本/i.test(line);
 
-  return mentionsMacos && mentionsNative && experimental && !stableClaim && !latestClaim;
+  return mentionsPlatform && mentionsNative && experimental && !stableClaim && !latestClaim;
+}
+
+function isAllowedMixedStableExperimentalLine(line) {
+  const mentionsWindows = /Windows|win32/i.test(line);
+  const mentionsOldCliStable = /(旧\s*npm|old\s+npm|cli\.js).*\bstable\b|\bstable\b.*(旧\s*npm|old\s+npm|cli\.js)/i.test(line);
+  const mentionsNativeExperimental = /(native|原生|\.exe|二进制|binary).*?(experimental|实验)|(experimental|实验).*?(native|原生|\.exe|二进制|binary)/i.test(line);
+
+  return mentionsWindows && mentionsOldCliStable && mentionsNativeExperimental;
 }
 
 function findSupportClaim(line, boundary) {
@@ -109,7 +117,8 @@ function findSupportClaim(line, boundary) {
     hasFutureVersion &&
     hasSupportVerb &&
     !isNegatedBoundaryLine(line) &&
-    !isAllowedNativeExperimentalLine(line)
+    !isAllowedNativeExperimentalLine(line) &&
+    !isAllowedMixedStableExperimentalLine(line)
   ) {
     return `${boundary.nativeBoundary}+ / latest 不能写成 stable 支持`;
   }
@@ -122,6 +131,7 @@ function findWindowsNativeClaim(line) {
   const mentionsNative = /native|原生|\.exe|二进制|binary wrapper|official installer|官方安装器/i.test(line);
   const mentionsNativeExe = /Windows\s+native|Windows\s+原生|\.exe|native binary|原生二进制|binary wrapper/i.test(line);
   const scopedOldNpm = /旧\s*npm|old\s+npm|cli\.js/i.test(line) && /2\.1\.112/.test(line);
+  const scopedWindowsExperimental = /experimental|实验|已验证|需要安装 node-lief/.test(line) && /2\.1\.\d+|Windows native patch/.test(line);
   const mentionsCliPatch = /CLI Patch|完整 CLI|稳定|stable|支持/i.test(line);
   const hasSupportVerb = /已支持|支持|stable|可用|support/i.test(line);
 
@@ -132,7 +142,8 @@ function findWindowsNativeClaim(line) {
     hasSupportVerb &&
     !isNegatedBoundaryLine(line) &&
     mentionsNativeExe &&
-    !scopedOldNpm
+    !scopedOldNpm &&
+    !scopedWindowsExperimental
   ) {
     return "Windows native 只能写成 WSL + npm stable，不能写成 native stable 支持";
   }
@@ -211,14 +222,15 @@ function addSupportEntryFindings(findings, node, relative, pathParts, boundary) 
     const pathText = entryPath.toLowerCase();
     const isMacosInstaller = pathText.includes("macosofficialinstaller");
     const isMacosNativeExperimental = pathText.includes("macosnativeexperimental");
+    const isWindowsNativeExperimental = pathText.includes("windowsnativeexperimental");
     const isWindowsNative =
       pathText.includes("windows") &&
       (pathText.includes("native") || pathText.includes("exe") || pathText.includes("binary") || pathText.includes("official"));
-    const ceilingLimit = isMacosNativeExperimental || !boundary.validStableRange
+    const ceilingLimit = isMacosNativeExperimental || isWindowsNativeExperimental || !boundary.validStableRange
       ? null
       : boundary.stableCeiling;
 
-    if (isWindowsNative && node.unsupported !== true) {
+    if (isWindowsNative && !isWindowsNativeExperimental && node.unsupported !== true) {
       findings.push({
         file: relative,
         line: 1,
@@ -295,15 +307,15 @@ function buildFindings(repoRoot) {
 function printOk(boundary) {
   console.log(`support-boundary-guard: OK`);
   console.log(`stable CLI Patch: ${boundary.stableRange}`);
-  console.log(`native CLI Patch: only explicitly verified macOS experimental versions; no latest stable claim`);
+  console.log(`native CLI Patch: only explicitly verified macOS / Windows experimental versions; no latest stable claim`);
 }
 
 function printFail(findings, boundary) {
   console.log("support-boundary-guard: FAIL");
   console.log("当前官方边界:");
   console.log(`- stable CLI Patch: ${boundary.stableRange}`);
-  console.log(`- ${boundary.nativeBoundary}+ / latest: 不能写成 stable；macOS native 只能写已验证 experimental 窗口`);
-  console.log("- Windows 只能写成 WSL + npm stable，不能写成 Windows native stable");
+  console.log(`- ${boundary.nativeBoundary}+ / latest: 不能写成 stable；native 只能写已验证 experimental 窗口`);
+  console.log("- Windows native 只能写成 explicit experimental，不能写成 stable");
   console.log("");
 
   for (const finding of findings) {
