@@ -126,6 +126,7 @@ function packageShapeError(packageDir) {
   if (!fs.existsSync(packageDir)) return "missing package/";
   if (fs.existsSync(path.join(packageDir, "cli.js"))) return null;
   if (fs.existsSync(path.join(packageDir, "claude"))) return null;
+  if (fs.existsSync(path.join(packageDir, "claude.exe"))) return null;
   if (fs.existsSync(path.join(packageDir, "bin", "claude.exe"))) return null;
   return "missing cli.js or native executable";
 }
@@ -159,8 +160,7 @@ function downloadPackage(packageName, version, packagesDir) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-  const tarCwd = isWindows ? versionRoot.replace(/\\/g, "/").replace(/^([A-Z]):/, "/$1") : versionRoot;
-  execFile("tar", ["-xzf", tarball, "-C", tarCwd], {
+  execFile("tar", ["-xzf", tarball, "-C", "."], {
     cwd: versionRoot,
     stdio: ["ignore", "ignore", "pipe"],
   });

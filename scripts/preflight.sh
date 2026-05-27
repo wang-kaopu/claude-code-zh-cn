@@ -82,8 +82,10 @@ trap cleanup EXIT
 step "Shell syntax check"
 run bash -n install.sh
 run bash -n uninstall.sh
+run bash -n doctor.sh
 run bash -n install-remote.sh
 run bash -n uninstall-remote.sh
+run bash -n plugin/bin/doctor
 run bash -n plugin/bin/claude-launcher
 run bash -n plugin/hooks/session-start
 run bash -n plugin/hooks/notification
@@ -93,6 +95,7 @@ step "JavaScript syntax check"
 run node --check bun-binary-io.js
 run node --check plugin/bun-binary-io.js
 run node --check plugin/patch-cli.js
+run node --check plugin/scripts/zh-cn-doctor.js
 run node --check scripts/check-payload-sources.js
 run node --check scripts/check-support-boundary.js
 run node --check scripts/check-translation-sentinels.js
@@ -107,6 +110,7 @@ run node --check scripts/sync-doc-derived-counts.js
 run node --check scripts/sync-readme-support-window.js
 run node --check scripts/verify-release-state.js
 run node --check scripts/verify-upstream-compat.js
+run node --check scripts/zh-cn-doctor.js
 
 if [ "$SKIP_PAYLOAD_SOURCE" -eq 1 ]; then
   step "Check payload source edits"

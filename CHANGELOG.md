@@ -6,6 +6,52 @@
 - **次版本号**：新增功能或显著改进（比如新增 patch、新增翻译）
 - **修订号**：Bug 修复和小调整（比如修正一条翻译）
 
+## [2.4.26] - 2026-05-27
+
+### 修复
+
+- Windows native `.exe` 版本检测新增回退：当二进制内嵌 JS 头部读不到 `// Version:` 时，会继续读取 npm 包 `package.json`，必要时再执行 `claude.exe --version`。这可以避免 issue #70 里 Windows + `claude 2.1.150` 被误判为 `unknown`，导致已验证版本仍跳过 CLI Patch。
+- README 的 `node-lief` 依赖说明改为明确区分 native experimental 与旧版 npm `cli.js` 路径，避免支持边界守门误报。
+
+### 验证
+
+- `node --test tests/bun-binary-io.test.js tests/plugin-payload.test.js`
+- `node --test tests/support-boundary-guard.test.js`
+- `npm_config_cache=/private/tmp/cczh-npm-cache bash scripts/preflight.sh --skip-release-state`
+
+## [2.4.25] - 2026-05-26
+
+### 新增
+
+- Windows x64 native `.exe` 纳入 experimental CLI Patch 支持窗口，已验证版本与 macOS native 窗口对齐；未验证 latest 仍会安全跳过。
+- `install.ps1` 支持按 `windowsNativeExperimental` 支持窗口执行 PE/Bun extract / patch / repack，并写入 native patch marker。
+- CI 新增 Windows native compat lane，native latest candidate workflow 也会产出 Windows native 验证 artifact。
+
+### 修复
+
+- doctor 诊断不再把 macOS native 支持窗口误用于 Windows `.exe`，并会校验 native marker 的版本、二进制 hash 与 patch 规则 revision。
+
+### 验证
+
+- `node --test tests/bun-binary-io.test.js tests/install-smoke.test.js tests/doctor.test.js tests/upstream-compat.test.js tests/support-boundary-guard.test.js tests/support-matrix-generation.test.js tests/readme-support-window-sync.test.js tests/native-latest-workflow.test.js tests/plugin-payload.test.js tests/payload-source-guard.test.js tests/preflight.test.js`
+- `bash scripts/preflight.sh --skip-release-state`
+
+## [2.4.24] - 2026-05-26
+
+### 新增
+
+- 新增 `./doctor.sh` 和安装后的 `~/.claude/plugins/claude-code-zh-cn/bin/doctor` 诊断入口，可检查插件目录、settings、Claude 安装形态、CLI 版本、patch 记录和 Layer 4 状态，并给出下一步命令。
+- 诊断脚本支持 `--json`，方便 issue 反馈或脚本化收集安装状态。
+
+### 修复
+
+- 诊断脚本遇到损坏的插件 `manifest.json` 时不再直接崩溃，会输出可读的 fail 检查。
+- npm CLI Patch 状态现在会检查 folder trust、approval、`/btw` 三个高风险英文探针，避免只看一个 sentinel 导致误报已 patch。
+
+### 验证
+
+- `node --test tests/doctor.test.js tests/plugin-payload.test.js tests/payload-source-guard.test.js tests/preflight.test.js`
+
 ## [2.4.23] - 2026-05-25
 
 ### 新增
