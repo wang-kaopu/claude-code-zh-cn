@@ -6,6 +6,129 @@
 - **次版本号**：新增功能或显著改进（比如新增 patch、新增翻译）
 - **修订号**：Bug 修复和小调整（比如修正一条翻译）
 
+## [2.4.35] - 2026-05-29
+
+### 改进
+
+- macOS native latest 自动 closeout 跟进 Claude Code `2.1.156`：验证通过后同步支持窗口、README / support matrix 派生产物，并把插件版本推进到 `2.4.35`，合并后可按发布流程创建 `v2.4.35`。
+
+### 验证
+
+- `Native Latest Candidate workflow`
+- `CI preflight`
+
+## [2.4.34] - 2026-05-29
+
+### 修复
+
+- 补齐 `/exit`、`/feedback`、`/focus`、`/goal` 等 slash command 菜单描述的中文翻译，覆盖 issue #80 后续截图里仍残留的英文。
+- 新增 `/fast` 动态模板翻译规则，支持 `Opus 4.6`、`Opus 4.8` 等不同上游模型名，避免只命中特定旧版本文案。
+- 扩展 upstream guard，把这些 slash 菜单描述纳入跨版本兼容检查，避免后续版本再次漏掉。
+
+### 验证
+
+- `node --test tests/patch-cli.test.js tests/translations-quality.test.js tests/translations-schema.test.js tests/upstream-compat.test.js`
+- `bash scripts/preflight.sh --skip-release-state`
+
+## [2.4.33] - 2026-05-28
+
+### 修复
+
+- Windows x64 native `.exe` experimental 支持窗口扩展到 Claude Code `2.1.153`，跟进 issue #80 reporter 在 `v2.4.32` 下仍落在本机自验证路径的问题。
+- 补齐 issue #80 截图里暴露的 2.1.153 可见英文残留：model 切换提示、JetBrains 插件提示、`/simplify`、`/advisor`、`/background` 和 `/clear` 描述，并加入 upstream guard 防止 native 验证只看版本窗口、漏看新文案。
+
+### 验证
+
+- Native Latest Candidate workflow `26559956813` 的 Windows native candidate job 通过，artifact 为 `windows-native-latest-candidate-2.1.153`。
+- `node --test tests/patch-cli.test.js tests/translations-quality.test.js tests/upstream-compat.test.js`
+
+## [2.4.32] - 2026-05-28
+
+### 改进
+
+- macOS native latest 自动 closeout 跟进 Claude Code `2.1.153`：验证通过后同步支持窗口、README / support matrix 派生产物，并把插件版本推进到 `2.4.32`，合并后可按发布流程创建 `v2.4.32`。
+
+### 验证
+
+- `Native Latest Candidate workflow`
+- `CI preflight`
+
+## [2.4.31] - 2026-05-28
+
+### 修复
+
+- CC Switch 同步逻辑在写入 `common_config_claude` 的同时，会为 Claude 供应商启用通用配置写入，避免切换到其他模型/供应商后中文设置再次被覆盖。
+- `doctor` 会检查 Claude 供应商是否启用了通用配置写入；当通用配置已包含中文设置但 provider 未启用时，会明确提示需要重新运行安装器或在 CC Switch 中勾选写入通用配置。
+
+### 验证
+
+- `node --test tests/node-only-runtime.test.js tests/doctor.test.js tests/install-smoke.test.js`
+- `node --test tests/*.test.js`
+- `bash scripts/preflight.sh`
+
+## [2.4.30] - 2026-05-28
+
+### 新增
+
+- native 安装器新增“软门禁 + 本机自验证”：当 macOS / Windows native 版本高于当前已发布支持窗口、但仍在同一 minor 版本线内时，安装时可尝试 extract / patch / repack / `--version` 自验证，通过才启用 CLI Patch。
+- provisional native patch marker 会明确写入 `provisional`、平台和原始二进制 hash；doctor 会把它显示为“本机自验证，尚未纳入已发布支持窗口”，避免把本机临时通过误报成公开支持。
+
+### 修复
+
+- 已明确排除的 native 版本仍保持跳过，不会因为同 minor 软门禁被拿去 provisional patch。
+
+### 验证
+
+- `node --test tests/install-smoke.test.js tests/doctor.test.js tests/session-start-hook.test.js tests/plugin-payload.test.js tests/payload-source-guard.test.js`
+- `bash -n install.sh plugin/hooks/session-start`
+- `node --check scripts/zh-cn-doctor.js`
+- `node --check plugin/scripts/zh-cn-doctor.js`
+- `git diff --check`
+
+## [2.4.29] - 2026-05-28
+
+### 修复
+
+- Windows x64 native `.exe` experimental 支持窗口扩展到 Claude Code `2.1.152`，用于解决 issue #80 中 Windows 用户安装后 CLI Patch 被跳过、主界面仍为英文的问题；`2.1.151` 仍保留在未纳入支持列表中。
+- macOS arm64 native experimental 支持窗口同步推进到 Claude Code `2.1.152`，吸收本轮 native latest 自动验证结果，避免 `v2.4.29` 被拆成重复 release。
+- README、support matrix 和插件支持窗口同步更新 native `2.1.152` 支持边界，并新增回归测试防止 issue #80 的版本再次从生成窗口中丢失。
+
+### 验证
+
+- `node --test tests/support-window-generation.test.js tests/readme-support-window-sync.test.js tests/native-candidate-promotion.test.js`
+- `NODE_PATH=/private/tmp/cczh-node-lief/node_modules npm_config_cache=/private/tmp/cczh-npm-cache node scripts/verify-upstream-compat.js --baseline 2.1.152 --skip-latest --native-macos-arm64 --json`
+- GitHub Actions native candidate run `26530183703`：Windows native candidate 和 macOS native candidate 均通过。
+
+## [2.4.28] - 2026-05-27
+
+### 修复
+
+- 修复 `install.ps1` 的 CC Switch 提示文案在 Windows PowerShell 中因中文弯引号被当作字符串分隔符，导致 `Write-Host -ForegroundColor` 参数绑定失败的问题。
+- 新增 `install.ps1` 弯引号守门测试，避免后续 PowerShell 文案再次触发同类解析问题。
+- 新增 PR 自动关闭关键词守门，避免 PR 描述里的 `Fixes #...` / `Closes #...` 在 reporter 复测前误关 issue。
+
+### 验证
+
+- `node --test tests/install-smoke.test.js`
+- `env NPM_CONFIG_CACHE=/private/tmp/cczh-npm-cache bash scripts/preflight.sh --skip-release-state`
+
+## [2.4.27] - 2026-05-27
+
+### 新增
+
+- 安装器检测到 CC Switch 的 Claude 通用配置缺少中文设置时，会先询问用户是否同意同步；同意后才会备份并写入 CC Switch 本地数据库，拒绝则保留手动处理路径。
+- `doctor` 新增 CC Switch 通用配置只读检查，可提示用户重新运行安装器并授权同步，或在 CC Switch 中手动重新提取通用配置。
+
+### 修复
+
+- `doctor` 兼容当前 `spinnerVerbs: { mode, verbs }` 结构，不再把 187 个 spinner 动词误判为 2 个字段。
+
+### 验证
+
+- `node --test tests/doctor.test.js tests/node-only-runtime.test.js`
+- `node --test tests/plugin-payload.test.js tests/payload-source-guard.test.js tests/install-json-helper.test.js`
+- `env NPM_CONFIG_CACHE=/private/tmp/cczh-npm-cache bash scripts/preflight.sh --skip-release-state`
+
 ## [2.4.26] - 2026-05-27
 
 ### 修复

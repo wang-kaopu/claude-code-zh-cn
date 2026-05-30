@@ -200,6 +200,31 @@ test("fragment migrations use targeted structural patches instead of broad engli
   assert.match(patched, /" 已就绪 · 按 shift\+↓ 查看"/);
 });
 
+test("issue 80 native dynamic residues use targeted structural patches", () => {
+  const patched = patchFixture([
+    'let ideNotice=L7.createElement(k,null,"Install the ",L7.createElement(k,{color:"ide"},q)," plugin from the JetBrains Marketplace:"," ",L7.createElement(k,{bold:!0},"https://docs.claude.com/s/claude-code-jetbrains"));',
+    'function rHK(H,q,K,$){let f=`Set model to ${P8.bold(US(H))}${$?" and saved as your default for new sessions":" for this session only"}`,A=void 0;return f}',
+    'let N4=true,pickerStatus=`Model set to ${bb(v8)}${gW.current?" and saved as your default for new sessions":" for this session only"}`;',
+    'let remoteStatus=$(`Set model to ${P8.bold(US(P))}`);',
+    'function BNf(){return`Review the current diff for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high\\u2192max: broader coverage, may include uncertain findings${iB()?"; ultra: deep multi-agent review in the cloud":""}). Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.`}',
+    "",
+  ]);
+
+  assert.equal(patched.includes("Install the "), false, patched);
+  assert.equal(patched.includes(" plugin from the JetBrains Marketplace:"), false, patched);
+  assert.equal(patched.includes("Set model to "), false, patched);
+  assert.equal(patched.includes("Model set to "), false, patched);
+  assert.equal(patched.includes(" and saved as your default for new sessions"), false, patched);
+  assert.equal(patched.includes("Review the current diff for correctness bugs"), false, patched);
+  assert.match(patched, /"从 JetBrains Marketplace 安装 ",L7\.createElement\(k,\{color:"ide"\},q\)," 插件："/);
+  assert.match(patched, /`已切换模型为 \$\{P8\.bold\(US\(H\)\)\}\$\{\$\?"，并已保存为新会话默认模型":"（仅本次会话）"\}`/);
+  assert.match(patched, /`已切换模型为 \$\{bb\(v8\)\}\$\{gW\.current\?"，并已保存为新会话默认模型":"（仅本次会话）"\}`/);
+  assert.match(patched, /\$\(`已切换模型为 \$\{P8\.bold\(US\(P\)\)\}`\)/);
+  assert.match(patched, /审查当前 diff 的正确性问题/);
+  assert.match(patched, /high→max：覆盖更广/);
+  assert.match(patched, /ultra：云端深度多 Agent review/);
+});
+
 test("string translation must not rewrite identifiers or object keys across code boundaries", () => {
   const patched = patchFixture([
     'const modes={external:"acceptEdits"},bypassPermissions:{title:"Bypass Permissions",shortTitle:"Bypass"};',
@@ -224,6 +249,9 @@ test("single-quoted and template literal command descriptions are translated", (
     "const claudeApi=`Build, debug, and optimize Claude API / Anthropic SDK apps. Apps built with this skill should include prompt caching.\n`;",
     "const model=`Set the AI model for Claude Code (currently ${lH(W5())})`;",
     "const fast=`Toggle fast mode (${im} only)`;",
+    "const fastCurrent=`Toggle fast mode (${pp()})`;",
+    'const fastConcrete="Toggle fast mode (Opus 4.8)";',
+    'const fastConcreteOnly="Toggle fast mode (Opus 4.6 only)";',
     "",
   ]);
 
@@ -247,10 +275,28 @@ test("single-quoted and template literal command descriptions are translated", (
     false,
     patched
   );
+  assert.equal(
+    patched.includes("Toggle fast mode (${pp()})"),
+    false,
+    patched
+  );
+  assert.equal(
+    patched.includes("Toggle fast mode (Opus 4.8)"),
+    false,
+    patched
+  );
+  assert.equal(
+    patched.includes("Toggle fast mode (Opus 4.6 only)"),
+    false,
+    patched
+  );
   assert.match(patched, /使用此技能通过 settings\.json 配置 Claude Code harness。/);
   assert.match(patched, /构建、调试并优化 Claude API \/ Anthropic SDK 应用。使用此技能构建的应用应包含 prompt caching。/);
   assert.match(patched, /设置 Claude Code 使用的 AI 模型（当前为 \$\{lH\(W5\(\)\)\}）/);
   assert.match(patched, /切换快速模式（仅 \$\{im\}）/);
+  assert.match(patched, /切换快速模式（\$\{pp\(\)\}）/);
+  assert.match(patched, /切换快速模式（Opus 4\.8）/);
+  assert.match(patched, /切换快速模式（仅 Opus 4\.6）/);
 });
 
 test("single-quoted literals with apostrophes are translated", () => {
@@ -403,4 +449,29 @@ test("dynamic effort help description is translated while preserving choices exp
     true,
     patched
   );
+});
+
+test("issue 80 slash command menu residues are translated", () => {
+  const patched = patchFixture([
+    'const exitDescription="Exit the CLI";',
+    'const feedback={name:"feedback",description:"Submit feedback, report a bug, or share your conversation"};',
+    'const focus={name:"focus",description:"Toggle focus view (show only your prompt, a tool summary, and the final response)"};',
+    'const goal={name:"goal",description:"Set a goal \\u2014 keep working until the condition is met"};',
+    'const usage={name:"usage",description:"Show session cost, plan usage, and activity stats"};',
+    'const stop={name:"stop",description:"Stop this background session; transcript and worktree are kept"};',
+    "",
+  ]);
+
+  assert.equal(patched.includes("Exit the CLI"), false, patched);
+  assert.equal(patched.includes("Submit feedback, report a bug, or share your conversation"), false, patched);
+  assert.equal(patched.includes("Toggle focus view (show only your prompt"), false, patched);
+  assert.equal(patched.includes("Set a goal \\u2014 keep working until the condition is met"), false, patched);
+  assert.equal(patched.includes("Show session cost, plan usage, and activity stats"), false, patched);
+  assert.equal(patched.includes("Stop this background session; transcript and worktree are kept"), false, patched);
+  assert.match(patched, /退出 CLI/);
+  assert.match(patched, /提交反馈、报告问题或分享你的对话/);
+  assert.match(patched, /切换专注视图/);
+  assert.match(patched, /设置目标：持续工作直到条件满足/);
+  assert.match(patched, /显示会话成本、计划用量和活动统计/);
+  assert.match(patched, /停止这个后台会话；保留 transcript 和 worktree/);
 });

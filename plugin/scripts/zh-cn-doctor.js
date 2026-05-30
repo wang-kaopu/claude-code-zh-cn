@@ -162,6 +162,9 @@ function parseMarker(marker) {
       version: parts[1] || "",
       hash: parts[2] || "",
       revision: parts[3] || "",
+      provisional: parts[4] === "provisional",
+      platform: parts[5] || "",
+      sourceHash: parts[6] || "",
     };
   }
   const [version, revision] = marker.split("|");
@@ -224,6 +227,135 @@ function icon(status) {
   return "✗";
 }
 
+function spinnerVerbCount(spinnerVerbs) {
+  if (Array.isArray(spinnerVerbs)) {
+    return spinnerVerbs.length;
+  }
+  if (!spinnerVerbs || typeof spinnerVerbs !== "object") {
+    return 0;
+  }
+  if (Array.isArray(spinnerVerbs.verbs)) {
+    return spinnerVerbs.verbs.length;
+  }
+  return Object.keys(spinnerVerbs).length;
+}
+
+function spinnerTipCount(spinnerTipsOverride) {
+  if (Array.isArray(spinnerTipsOverride)) {
+    return spinnerTipsOverride.length;
+  }
+  if (!spinnerTipsOverride || typeof spinnerTipsOverride !== "object") {
+    return 0;
+  }
+  if (Array.isArray(spinnerTipsOverride.tips)) {
+    return spinnerTipsOverride.tips.length;
+  }
+  return 0;
+}
+
+function decodeHex(value) {
+  return Buffer.from(String(value || ""), "hex").toString("utf8");
+}
+
+function readCcSwitchClaudeProviders(dbFile) {
+  const tableResult = spawnSync(
+    "sqlite3",
+    [dbFile, "select count(*) from sqlite_master where type='table' and name='providers';"],
+    { encoding: "utf8" }
+  );
+
+  if (tableResult.status !== 0 || String(tableResult.stdout || "").trim() !== "1") {
+    return null;
+  }
+
+  const result = spawnSync(
+    "sqlite3",
+    [
+      dbFile,
+      "select hex(id), hex(name), hex(meta) from providers where app_type='claude' order by is_current desc, sort_index, name;",
+    ],
+    { encoding: "utf8" }
+  );
+
+  if (result.status !== 0) {
+    return null;
+  }
+
+  const providers = [];
+  for (const line of String(result.stdout || "").split(/\r?\n/).filter(Boolean)) {
+    const [idHex, nameHex, metaHex] = line.split("|");
+    const id = decodeHex(idHex);
+    const name = decodeHex(nameHex) || id || "(未命名)";
+    const metaText = decodeHex(metaHex);
+
+    try {
+      const meta = metaText.trim() ? JSON.parse(metaText) : {};
+      providers.push({
+        name,
+        commonConfigEnabled: meta && typeof meta === "object" && !Array.isArray(meta)
+          ? meta.commonConfigEnabled === true || meta.commonConfigEnabled === 1
+          : false,
+        invalidMeta: false,
+      });
+    } catch (_) {
+      providers.push({ name, commonConfigEnabled: false, invalidMeta: true });
+    }
+  }
+
+  return {
+    total: providers.length,
+    enabled: providers.filter((provider) => provider.commonConfigEnabled).length,
+    disabled: providers
+      .filter((provider) => !provider.commonConfigEnabled && !provider.invalidMeta)
+      .map((provider) => provider.name),
+    invalidMeta: providers
+      .filter((provider) => provider.invalidMeta)
+      .map((provider) => provider.name),
+  };
+}
+
+function readCcSwitchCommonConfig(homeDir) {
+  const dbFile = path.join(homeDir, ".cc-switch", "cc-switch.db");
+  if (!fs.existsSync(dbFile)) {
+    return { exists: false };
+  }
+
+  if (spawnSync("sqlite3", ["--version"], { encoding: "utf8" }).error) {
+    return { exists: true, error: "未检测到 sqlite3，无法检查 CC Switch 通用配置" };
+  }
+
+  const result = spawnSync(
+    "sqlite3",
+    [dbFile, "select value from settings where key='common_config_claude';"],
+    { encoding: "utf8" }
+  );
+
+  if (result.status !== 0) {
+    return {
+      exists: true,
+      error: String(result.stderr || "无法读取 CC Switch 通用配置").trim(),
+    };
+  }
+
+  const raw = String(result.stdout || "").trim();
+  if (!raw) {
+    return { exists: true, missing: true };
+  }
+
+  try {
+    return {
+      exists: true,
+      settings: JSON.parse(raw),
+      claudeProviders: readCcSwitchClaudeProviders(dbFile),
+    };
+  } catch (error) {
+    return {
+      exists: true,
+      error: `CC Switch common_config_claude 不是有效 JSON：${error.message}`,
+    };
+  }
+}
+
 /**
  * @param {object} options
  * @param {string} [options.repoRoot]
@@ -283,8 +415,7 @@ function runDoctor(options = {}) {
   if (fs.existsSync(settingsFile)) {
     try {
       const settings = readJson(settingsFile);
-      const verbs = settings.spinnerVerbs;
-      const verbCount = verbs && typeof verbs === "object" ? Object.keys(verbs).length : 0;
+      const verbCount = spinnerVerbCount(settings.spinnerVerbs);
       const languageOk = settings.language === "Chinese";
       if (languageOk && verbCount >= 100) {
         add("settings", "settings.json (Layer 1)", "ok", `language=Chinese，spinner 动词 ${verbCount} 个`);
@@ -311,6 +442,60 @@ function runDoctor(options = {}) {
   } else {
     add("settings", "settings.json (Layer 1)", "warn", `未找到 ${settingsFile}`);
     recommendations.push("运行 ./install.sh 创建并合并 settings.json");
+  }
+
+  const ccSwitch = readCcSwitchCommonConfig(homeDir);
+  if (ccSwitch.exists) {
+    if (ccSwitch.error) {
+      add("cc-switch", "CC Switch 通用配置", "warn", ccSwitch.error);
+      recommendations.push("如果使用 CC Switch 切换供应商后中文设置丢失，请在 CC Switch 中重新提取通用配置");
+    } else if (ccSwitch.missing) {
+      add("cc-switch", "CC Switch 通用配置", "warn", "未找到 common_config_claude");
+      recommendations.push("重新运行 ./install.sh，并同意同步 CC Switch 通用配置；或在 CC Switch 中手动重新提取通用配置");
+    } else {
+      const ccSwitchSettings = ccSwitch.settings || {};
+      const verbCount = spinnerVerbCount(ccSwitchSettings.spinnerVerbs);
+      const tipCount = spinnerTipCount(ccSwitchSettings.spinnerTipsOverride);
+      const complete =
+        ccSwitchSettings.language === "Chinese" &&
+        ccSwitchSettings.spinnerTipsEnabled === true &&
+        verbCount >= 100 &&
+        tipCount >= 40;
+
+      if (complete) {
+        const providerStatus = ccSwitch.claudeProviders;
+        const providerProblems = providerStatus
+          ? [...providerStatus.disabled, ...providerStatus.invalidMeta]
+          : [];
+
+        if (providerProblems.length > 0) {
+          const preview = providerProblems.slice(0, 3).join("、");
+          const more = providerProblems.length > 3 ? ` 等 ${providerProblems.length} 个` : "";
+          add(
+            "cc-switch",
+            "CC Switch 通用配置",
+            "warn",
+            `common_config_claude 已包含中文设置，但 ${providerProblems.length} 个 Claude 供应商未启用通用配置：${preview}${more}`
+          );
+          recommendations.push("重新运行 ./install.sh 并同意同步；或在 CC Switch 中为这些 Claude 供应商勾选写入通用配置");
+        } else {
+          add(
+            "cc-switch",
+            "CC Switch 通用配置",
+            "ok",
+            `common_config_claude 已包含中文设置，spinner 动词 ${verbCount} 个，提示 ${tipCount} 条`
+          );
+        }
+      } else {
+        add(
+          "cc-switch",
+          "CC Switch 通用配置",
+          "warn",
+          `common_config_claude 未包含完整中文设置（language=${ccSwitchSettings.language || "(未设置)"}，spinner 动词 ${verbCount} 个，提示 ${tipCount} 条）`
+        );
+        recommendations.push("重新运行 ./install.sh，并同意同步 CC Switch 通用配置；或在 CC Switch 中手动重新提取通用配置");
+      }
+    }
   }
 
   const pathWithoutLauncher = filteredPath(process.env.PATH, launcherBinDir);
@@ -374,7 +559,7 @@ function runDoctor(options = {}) {
       "CLI Patch 记录",
       "ok",
       marker.kind === "native"
-        ? `native ${marker.version} (revision ${marker.revision || "?"})`
+        ? `native ${marker.version} (revision ${marker.revision || "?"}${marker.provisional ? ", provisional" : ""})`
         : `${marker.version} (revision ${marker.revision || "?"})`
     );
   } else if (fs.existsSync(pluginRoot)) {
@@ -416,7 +601,24 @@ function runDoctor(options = {}) {
     const nativePlatform = nativePlatformForTarget(target);
     const supported = isSupportedNativeVersion(cliVersion, support, nativePlatform);
     const liefOk = checkNodeLief(bunBinaryIoPath);
-    if (!supported) {
+    if (!supported && marker.kind === "native" && marker.version === cliVersion && marker.provisional) {
+      const currentHash = nativeBinaryHash(bunBinaryIoPath, target);
+      const currentRevision = computePatchRevision(pluginRoot);
+      if (marker.hash && currentHash && marker.hash !== currentHash) {
+        layer4Status = "needed";
+        add("layer4", "Layer 4（UI 硬编码）", "warn", "provisional native 二进制 hash 与 patch 记录不一致");
+        recommendations.push("运行 ./install.sh 重新做本机自验证 patch");
+      } else if (marker.revision && currentRevision && marker.revision !== currentRevision) {
+        layer4Status = "needed";
+        add("layer4", "Layer 4（UI 硬编码）", "warn", "provisional patch 规则版本与记录不一致");
+        recommendations.push("运行 ./install.sh 重新做本机自验证 patch");
+      } else {
+        layer4Status = "provisional";
+        layer4Detail = `native ${cliVersion || "unknown"} 已本机自验证 patch，但尚未纳入已发布支持窗口`;
+        add("layer4", "Layer 4（UI 硬编码）", "warn", layer4Detail);
+        recommendations.push("这是本机通过的临时 patch；等插件发布支持窗口后可重新运行 ./install.sh 转为已验证记录");
+      }
+    } else if (!supported) {
       layer4Status = "unsupported";
       layer4Detail = `native ${cliVersion || "unknown"} 不在已验证支持窗口内`;
       add("layer4", "Layer 4（UI 硬编码）", "warn", layer4Detail);

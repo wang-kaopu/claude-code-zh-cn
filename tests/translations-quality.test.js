@@ -104,6 +104,28 @@ test("high-visibility translations use the curated wording", () => {
       "Run a cloud-hosted multi-agent code review of the current branch (or a PR number / base branch) and print the findings",
       "在云端运行多 Agent 代码审查，目标可为当前分支、PR 编号或基准分支，并打印结果",
     ],
+    ["Fast mode ON", "快速模式 开"],
+    ["Draws from usage credits", "会消耗用量额度"],
+    [
+      " for this session only. Selecting a model will undo this.",
+      "（仅本次会话）。选择模型将取消此设置。",
+    ],
+    [
+      "Review the current diff and apply the fixes \\u2014 equivalent to /code-review --fix.",
+      "审查当前 diff 并应用修复，相当于 /code-review --fix。",
+    ],
+    [
+      "Configure the Advisor Tool to consult a stronger model for guidance at key moments during a task",
+      "配置 Advisor Tool，在任务关键节点咨询更强模型获取建议",
+    ],
+    [
+      "Send this session to the background and free the terminal",
+      "将本会话放到后台并释放终端",
+    ],
+    [
+      "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+      "用空上下文开始新会话；之前的会话会保留在磁盘上（可用 /resume 恢复）",
+    ],
     [
       "Install Claude Code native build. Use [target] to specify version (stable, latest, or specific version)",
       "安装 Claude Code 原生构建。使用 [target] 指定版本（stable、latest 或具体版本）",
@@ -121,7 +143,15 @@ test("high-visibility translations use the curated wording", () => {
     ["Load MCP servers from JSON files or strings (space-separated)", "从 JSON 文件或字符串加载 MCP 服务器（空格分隔）"],
     ["Only use MCP servers from --mcp-config, ignoring all other MCP configurations", "仅使用 --mcp-config 中的 MCP 服务器，忽略其他所有 MCP 配置"],
     ["Permission mode to use for the session", "当前会话使用的权限模式"],
+    [
+      "Model for the current session. Provide an alias for the latest model (e.g. 'sonnet' or 'opus') or a model's full name (e.g. 'claude-opus-4-8').",
+      "当前会话使用的模型。可提供最新模型别名（例如 'sonnet' 或 'opus'），也可提供模型完整名称（例如 'claude-opus-4-8'）。",
+    ],
     ["System prompt to use for the session", "当前会话使用的系统提示词"],
+    [
+      "Enable prompt suggestions. In print/SDK mode, emits a prompt_suggestion message after each turn with a predicted next user prompt",
+      "启用提示建议。在非交互模式下，每轮结束后输出一条预测的下一步提示。",
+    ],
     [
       "Settings files that fail validation are silently ignored in this mode (no error dialog is shown).",
       "在此模式下，校验失败的 settings 文件会被静默忽略（不会显示错误对话框）。",
@@ -130,6 +160,14 @@ test("high-visibility translations use the curated wording", () => {
     [
       "List configured MCP servers. Note: The workspace trust dialog is skipped and stdio servers from .mcp.json are spawned for health checks. Only use this command in directories you trust.",
       "列出已配置的 MCP 服务器。注意：此命令会跳过工作区信任对话框，并启动 .mcp.json 中的 stdio 服务器进行健康检查。只在你信任的目录中使用此命令。",
+    ],
+    [
+      "List configured MCP servers. Unapproved .mcp.json servers are shown as \\u23F8 Pending approval and not connected to; approved servers are health-checked.",
+      "列出已配置的 MCP 服务器。未批准的 .mcp.json 服务器会显示为 ⏸ 待批准且不会连接；已批准的服务器会做健康检查。",
+    ],
+    [
+      "Get details about an MCP server. Unapproved .mcp.json servers are shown as \\u23F8 Pending approval and not connected to; approved servers are health-checked.",
+      "获取 MCP 服务器详情。未批准的 .mcp.json 服务器会显示为 ⏸ 待批准且不会连接；已批准的服务器会做健康检查。",
     ],
     [
       "Print the default auto mode environment, allow, soft_deny, and hard_deny rules as JSON",
@@ -198,6 +236,39 @@ test("slash command menu descriptions keep the newly restored wording", () => {
     ["Generate a one-line session recap now", "立即生成一行会话总结"],
     ["Create, update, list, or run scheduled remote agents (triggers) that execute on a cron schedule.", "创建、更新、列出或运行按 cron 计划执行的远程 Agent（triggers）。"],
     ["Build, debug, and optimize Claude API / Anthropic SDK apps. Apps built with this skill should include prompt caching.", "构建、调试并优化 Claude API / Anthropic SDK 应用。使用此技能构建的应用应包含 prompt caching。"],
+    ["Adjust mouse wheel scroll speed", "调整鼠标滚轮滚动速度"],
+    ["Browse dynamic workflow history (running and completed)", "浏览动态 workflow 历史（运行中和已完成）"],
+    ["Claude in Chrome (beta) settings", "Claude in Chrome（beta）设置"],
+    ["Configure optional break reminders and quiet-hours nudges", "配置可选的休息提醒和安静时段提示"],
+    ["Configure usage credits to keep working when you hit a limit", "配置用量额度，达到限制后继续工作"],
+    ["Detach from this background session (it keeps running)", "从这个后台会话断开（会话会继续运行）"],
+    ["Dump the JS heap to ~/Desktop", "将 JS heap dump 到 ~/Desktop"],
+    ["Exit the CLI", "退出 CLI"],
+    ["Free up context by summarizing the conversation so far", "通过总结当前对话释放上下文空间"],
+    ["Install the Claude Slack app", "安装 Claude Slack 应用"],
+    ["List, create, and delete recurring loops and stop-hooks", "列出、创建和删除循环任务与 stop-hook"],
+    ["Listen to Claude FM lo-fi radio", "收听 Claude FM lo-fi radio"],
+    ["Manage background services: assistants, scheduled tasks, and remote control", "管理后台服务：助手、计划任务和远程控制"],
+    ["Monitor and autofix any issues with the current PR", "监控并自动修复当前 PR 的问题"],
+    ["Options shown when the Pro plan Claude Code trial has ended", "Pro 计划 Claude Code 试用结束时显示的选项"],
+    ["Pick up skills added or changed on disk during this session", "加载本会话期间磁盘上新增或修改的 skills"],
+    ["Reconfigure Amazon Bedrock authentication, region, or model pins", "重新配置 Amazon Bedrock 认证、区域或模型固定"],
+    ["Reconfigure Google Vertex AI authentication, project, region, or model pins", "重新配置 Google Vertex AI 认证、项目、区域或模型固定"],
+    ["Renamed to /usage-credits", "已重命名为 /usage-credits"],
+    ["Session keeps running. Use /stop to end it.", "会话会继续运行。用 /stop 结束它。"],
+    ["Set a goal \\u2014 keep working until the condition is met", "设置目标：持续工作直到条件满足"],
+    ["Set the AI model for Claude Code", "设置 Claude Code 使用的 AI 模型"],
+    ["Set the terminal UI renderer (default | fullscreen)", "设置终端 UI 渲染器（default | fullscreen）"],
+    ["Show current context usage", "显示当前上下文用量"],
+    ["Show session cost, plan usage, and activity stats", "显示会话成本、计划用量和活动统计"],
+    ["Spawn a background agent that inherits the full conversation", "启动继承完整对话的后台 Agent"],
+    ["Stop this background session; transcript and worktree are kept", "停止这个后台会话；保留 transcript 和 worktree"],
+    ["Submit feedback, report a bug, or share your conversation", "提交反馈、报告问题或分享你的对话"],
+    ["Switch to the latest version (conversation continues)", "切换到最新版本（对话继续）"],
+    ["Toggle automemory off/on for this session", "切换本会话的 automemory 开/关"],
+    ["Toggle brief-only mode", "切换 brief-only 模式"],
+    ["Toggle focus view (show only your prompt, a tool summary, and the final response)", "切换专注视图（只显示你的提示词、工具摘要和最终回复）"],
+    ["Toggle voice mode", "切换语音模式"],
   ]);
 
   for (const [en, zh] of expected) {

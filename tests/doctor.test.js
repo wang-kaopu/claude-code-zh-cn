@@ -13,6 +13,45 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function hasSqlite3() {
+  return !spawnSync("sqlite3", ["--version"], { encoding: "utf8" }).error;
+}
+
+function sqlString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function createCcSwitchDb(home, commonConfig, providers = []) {
+  const dbFile = path.join(home, ".cc-switch", "cc-switch.db");
+  const configFile = path.join(home, "common_config_claude.json");
+  fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+  writeJson(configFile, commonConfig);
+
+  const providerSql = providers.length > 0
+    ? [
+        "create table providers (id text not null, app_type text not null, name text not null, settings_config text not null, meta text not null default '{}', is_current boolean not null default 0, sort_index integer, primary key(id, app_type));",
+        ...providers.map((provider, index) => (
+          `insert into providers(id,app_type,name,settings_config,meta,is_current,sort_index) values(${sqlString(provider.id)},${sqlString(provider.appType || "claude")},${sqlString(provider.name)},'{}',${sqlString(JSON.stringify(provider.meta || {}))},${provider.isCurrent ? 1 : 0},${index});`
+        )),
+      ]
+    : [];
+
+  const result = spawnSync(
+    "sqlite3",
+    [
+      dbFile,
+      [
+        "create table settings (key text primary key, value text);",
+        `insert into settings(key,value) values('common_config_claude', CAST(readfile(${sqlString(configFile)}) AS TEXT));`,
+        ...providerSql,
+      ].join(" ")
+    ],
+    { encoding: "utf8" }
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return dbFile;
+}
+
 function createFakeNpmClaudeLayout(home, cliBodyLines) {
   const cliFile = path.join(
     home,
@@ -215,6 +254,149 @@ test("runDoctor passes when npm cli sentinel is translated", () => {
   assert.equal(result.checks.some((item) => item.status === "fail"), false);
 });
 
+test("runDoctor counts current spinnerVerbs object shape", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-doctor-"));
+  const pluginRoot = path.join(home, ".claude", "plugins", "claude-code-zh-cn");
+
+  writeJson(path.join(pluginRoot, "manifest.json"), { name: "claude-code-zh-cn", version: "9.9.9" });
+  writeJson(path.join(home, ".claude", "settings.json"), {
+    language: "Chinese",
+    spinnerVerbs: {
+      mode: "replace",
+      verbs: Array.from({ length: 187 }, (_, index) => `动词${index}`),
+    },
+  });
+
+  const result = runDoctor({
+    repoRoot,
+    homeDir: home,
+    pluginRoot,
+    claudePath: "",
+    json: true,
+    color: false,
+  });
+
+  const settings = result.checks.find((item) => item.id === "settings");
+  assert.equal(settings.status, "ok");
+  assert.match(settings.detail, /187/);
+});
+
+test("runDoctor warns when CC Switch common Claude config is missing zh-cn overlay", { skip: hasSqlite3() ? false : "requires sqlite3" }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-doctor-ccswitch-"));
+  const pluginRoot = path.join(home, ".claude", "plugins", "claude-code-zh-cn");
+
+  writeJson(path.join(pluginRoot, "manifest.json"), { name: "claude-code-zh-cn", version: "9.9.9" });
+  writeJson(path.join(home, ".claude", "settings.json"), {
+    language: "Chinese",
+    spinnerVerbs: {
+      mode: "replace",
+      verbs: Array.from({ length: 187 }, (_, index) => `动词${index}`),
+    },
+  });
+  createCcSwitchDb(home, { env: { ANTHROPIC_BASE_URL: "https://example.test" } });
+
+  const result = runDoctor({
+    repoRoot,
+    homeDir: home,
+    pluginRoot,
+    claudePath: "",
+    json: true,
+    color: false,
+  });
+
+  const ccSwitch = result.checks.find((item) => item.id === "cc-switch");
+  assert.equal(ccSwitch.status, "warn");
+  assert.match(ccSwitch.detail, /未包含完整中文设置/);
+  assert.ok(result.recommendations.some((line) => line.includes("同意同步 CC Switch 通用配置")));
+});
+
+test("runDoctor accepts complete CC Switch common Claude config", { skip: hasSqlite3() ? false : "requires sqlite3" }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-doctor-ccswitch-ok-"));
+  const pluginRoot = path.join(home, ".claude", "plugins", "claude-code-zh-cn");
+
+  writeJson(path.join(pluginRoot, "manifest.json"), { name: "claude-code-zh-cn", version: "9.9.9" });
+  writeJson(path.join(home, ".claude", "settings.json"), {
+    language: "Chinese",
+    spinnerVerbs: {
+      mode: "replace",
+      verbs: Array.from({ length: 187 }, (_, index) => `动词${index}`),
+    },
+  });
+  createCcSwitchDb(home, {
+    language: "Chinese",
+    spinnerTipsEnabled: true,
+    spinnerVerbs: {
+      mode: "replace",
+      verbs: Array.from({ length: 187 }, (_, index) => `动词${index}`),
+    },
+    spinnerTipsOverride: {
+      excludeDefault: true,
+      tips: Array.from({ length: 41 }, (_, index) => `提示${index}`),
+    },
+  });
+
+  const result = runDoctor({
+    repoRoot,
+    homeDir: home,
+    pluginRoot,
+    claudePath: "",
+    json: true,
+    color: false,
+  });
+
+  const ccSwitch = result.checks.find((item) => item.id === "cc-switch");
+  assert.equal(ccSwitch.status, "ok");
+  assert.match(ccSwitch.detail, /187/);
+  assert.match(ccSwitch.detail, /41/);
+});
+
+test("runDoctor warns when CC Switch Claude providers do not write common config", { skip: hasSqlite3() ? false : "requires sqlite3" }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-doctor-ccswitch-providers-"));
+  const pluginRoot = path.join(home, ".claude", "plugins", "claude-code-zh-cn");
+
+  writeJson(path.join(pluginRoot, "manifest.json"), { name: "claude-code-zh-cn", version: "9.9.9" });
+  writeJson(path.join(home, ".claude", "settings.json"), {
+    language: "Chinese",
+    spinnerVerbs: {
+      mode: "replace",
+      verbs: Array.from({ length: 187 }, (_, index) => `动词${index}`),
+    },
+  });
+  createCcSwitchDb(
+    home,
+    {
+      language: "Chinese",
+      spinnerTipsEnabled: true,
+      spinnerVerbs: {
+        mode: "replace",
+        verbs: Array.from({ length: 187 }, (_, index) => `动词${index}`),
+      },
+      spinnerTipsOverride: {
+        excludeDefault: true,
+        tips: Array.from({ length: 41 }, (_, index) => `提示${index}`),
+      },
+    },
+    [
+      { id: "deepseek", name: "DeepSeek", meta: { apiFormat: "anthropic" } },
+      { id: "zhipu", name: "Zhipu GLM", meta: { apiFormat: "anthropic", commonConfigEnabled: true } },
+    ]
+  );
+
+  const result = runDoctor({
+    repoRoot,
+    homeDir: home,
+    pluginRoot,
+    claudePath: "",
+    json: true,
+    color: false,
+  });
+
+  const ccSwitch = result.checks.find((item) => item.id === "cc-switch");
+  assert.equal(ccSwitch.status, "warn");
+  assert.match(ccSwitch.detail, /DeepSeek/);
+  assert.ok(result.recommendations.some((line) => line.includes("勾选写入通用配置")));
+});
+
 test("runDoctor does not treat macOS native support as Windows native support", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-doctor-"));
   const pluginRoot = path.join(home, ".claude", "plugins", "claude-code-zh-cn");
@@ -317,6 +499,44 @@ test("runDoctor reports supported Windows native as needing node-lief or patch",
   layer4 = ok.checks.find((item) => item.id === "layer4");
   assert.equal(layer4.status, "ok");
   assert.equal(ok.layer4Status, "ok");
+});
+
+test("runDoctor reports provisional native marker without treating it as published support", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-doctor-"));
+  const pluginRoot = path.join(home, ".claude", "plugins", "claude-code-zh-cn");
+  const targetPath = path.join(home, "claude.exe");
+
+  fs.writeFileSync(targetPath, "fake exe");
+  createFakeNativeDoctorPlugin(pluginRoot, {
+    version: "2.1.153",
+    targetPath,
+    depStatus: "ok",
+    marker: "native|2.1.153|fakehash||provisional|win32-x64|sourcehash\n",
+    supportWindow: {
+      windowsNativeExperimental: {
+        platform: "win32-x64",
+        versions: ["2.1.152"],
+        ceiling: "2.1.152",
+      },
+    },
+  });
+
+  const result = runDoctor({
+    repoRoot,
+    homeDir: home,
+    pluginRoot,
+    claudePath: targetPath,
+    json: true,
+    color: false,
+  });
+
+  const marker = result.checks.find((item) => item.id === "patch-marker");
+  const layer4 = result.checks.find((item) => item.id === "layer4");
+  assert.match(marker.detail, /provisional/);
+  assert.equal(layer4.status, "warn");
+  assert.match(layer4.detail, /本机自验证/);
+  assert.match(layer4.detail, /尚未纳入已发布支持窗口/);
+  assert.equal(result.layer4Status, "provisional");
 });
 
 test("runDoctor requires native marker hash to match current binary", () => {

@@ -19,8 +19,10 @@ INSTALL_JSON_HELPER="$SCRIPT_DIR/scripts/install-json-helper.js"
 MARKER_FILE="$PLUGIN_DST/.patched-version"
 SOURCE_REPO_FILE="$PLUGIN_DST/.source-repo"
 LAST_UPDATE_CHECK_FILE="$PLUGIN_DST/.last-update-check"
+CCSWITCH_CONSENT_FILE="$PLUGIN_DST/.ccswitch-sync-consent"
 SOURCE_REPO_OVERRIDE="${ZH_CN_SOURCE_REPO:-}"
 SKIP_BANNER="${ZH_CN_SKIP_BANNER:-0}"
+CCSWITCH_SYNC_CHOICE="${ZH_CN_CCSWITCH_SYNC:-}"
 LAUNCHER_BIN_DIR="${ZH_CN_LAUNCHER_BIN_DIR:-$HOME/.claude/bin}"
 LAUNCHER_FILE="$LAUNCHER_BIN_DIR/claude"
 PROFILE_FILES_OVERRIDE="${ZH_CN_PROFILE_FILES:-}"
@@ -91,7 +93,7 @@ print_completion() {
     install_info="$(detect_installation)"
     if [[ "${install_info:-}" == native-bun:* ]]; then
         echo ""
-        echo -e "  ${YELLOW}!${NC} 官方安装器 native patch 属于 experimental，只对已验证旧版本开放"
+        echo -e "  ${YELLOW}!${NC} 官方安装器 native patch 属于 experimental；新同版本线会在安装时本机自验证"
     fi
 
     echo ""
@@ -143,6 +145,13 @@ check_dependencies() {
             else
                 echo -e "${YELLOW}检测到已验证原生二进制版本 ${native_version}，将使用 experimental native patch${NC}"
             fi
+        elif can_try_provisional_native_version "$native_version"; then
+            if [ "$dep_status" != "ok" ]; then
+                echo -e "${YELLOW}检测到新原生二进制版本 ${native_version:-unknown}，同版本线可在安装时本机自验证；需要 node-lief${NC}"
+                echo -e "  运行: ${GREEN}npm install -g node-lief${NC}"
+            else
+                echo -e "${YELLOW}检测到新原生二进制版本 ${native_version}，将尝试本机自验证；通过才启用 CLI Patch${NC}"
+            fi
         else
             echo -e "${YELLOW}检测到原生二进制安装方式；当前版本 ${native_version:-unknown} 暂不支持 CLI Patch，已跳过 CLI Patch（安全退出）${NC}"
             echo -e "  macOS native 已验证窗口：$(native_support_summary)"
@@ -172,8 +181,40 @@ native_binary_version() {
     printf '%s' "$output" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
 }
 
+native_binary_version_from_execution() {
+    local binary_path="$1"
+    local output temp_home
+
+    temp_home="$(mktemp -d "${TMPDIR:-/tmp}/cczh-version-home.XXXXXX" 2>/dev/null || true)"
+    if [ -n "${temp_home:-}" ]; then
+        output="$(HOME="$temp_home" XDG_CONFIG_HOME="$temp_home/.config" XDG_CACHE_HOME="$temp_home/.cache" XDG_DATA_HOME="$temp_home/.local/share" "$binary_path" --version 2>/dev/null || true)"
+        rm -rf "$temp_home" 2>/dev/null || true
+    else
+        output="$("$binary_path" --version 2>/dev/null || true)"
+    fi
+
+    printf '%s' "$output" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+}
+
+native_platform() {
+    if [ -n "${ZH_CN_NATIVE_PLATFORM:-}" ]; then
+        printf '%s' "$ZH_CN_NATIVE_PLATFORM"
+        return
+    fi
+
+    case "$(uname -s 2>/dev/null)-$(uname -m 2>/dev/null)" in
+        Darwin-arm64|Darwin-aarch64)
+            printf 'darwin-arm64'
+            ;;
+        *)
+            printf ''
+            ;;
+    esac
+}
+
 is_supported_native_version() {
     local version="$1"
+    local platform="${2:-$(native_platform)}"
     local support_file="$PLUGIN_SRC/support-window.json"
 
     if [ ! -f "$support_file" ]; then
@@ -187,16 +228,74 @@ is_supported_native_version() {
         esac
     fi
 
-    node - "$support_file" "$version" <<'NODE'
+node - "$support_file" "$version" "$platform" <<'NODE'
 const fs = require("fs");
 const file = process.argv[2];
 const version = process.argv[3];
+const platform = process.argv[4] || "";
 const data = JSON.parse(fs.readFileSync(file, "utf8"));
-const versions = [
-  ...(data.macosNativeOfficialInstallerExperimental?.versions || []),
-  ...(data.macosNativeExperimental?.versions || []),
-];
+const versions = [];
+for (const key of ["macosNativeOfficialInstallerExperimental", "macosNativeExperimental"]) {
+  const entry = data[key];
+  if (!entry) continue;
+  if (platform && entry.platform && entry.platform !== platform) continue;
+  versions.push(...(entry.versions || []));
+}
 process.exit(versions.includes(version) ? 0 : 1);
+NODE
+}
+
+can_try_provisional_native_version() {
+    local version="$1"
+    local platform="${2:-$(native_platform)}"
+    local support_file="$PLUGIN_SRC/support-window.json"
+
+    if [ -z "${version:-}" ] || [ -z "${platform:-}" ] || [ ! -f "$support_file" ]; then
+        return 1
+    fi
+
+    node - "$support_file" "$version" "$platform" <<'NODE'
+const fs = require("fs");
+const file = process.argv[2];
+const version = process.argv[3];
+const platform = process.argv[4];
+const data = JSON.parse(fs.readFileSync(file, "utf8"));
+
+function parse(v) {
+  return String(v || "").split(".").map((part) => {
+    const n = Number.parseInt(part, 10);
+    return Number.isFinite(n) ? n : 0;
+  });
+}
+
+function compare(a, b) {
+  const left = parse(a);
+  const right = parse(b);
+  const max = Math.max(left.length, right.length);
+  for (let i = 0; i < max; i += 1) {
+    const l = left[i] || 0;
+    const r = right[i] || 0;
+    if (l > r) return 1;
+    if (l < r) return -1;
+  }
+  return 0;
+}
+
+function sameMinor(a, b) {
+  const left = parse(a);
+  const right = parse(b);
+  return left[0] === right[0] && left[1] === right[1];
+}
+
+const keys = ["macosNativeExperimental"];
+for (const key of keys) {
+  const entry = data[key];
+  if (!entry || entry.platform !== platform || !entry.ceiling) continue;
+  if (sameMinor(version, entry.ceiling) && compare(version, entry.ceiling) > 0) {
+    process.exit(0);
+  }
+}
+process.exit(1);
 NODE
 }
 
@@ -288,6 +387,372 @@ process.stdout.write(JSON.stringify(base));
 "
 }
 
+ccswitch_manual_steps() {
+    if [ "$SKIP_BANNER" = "1" ]; then
+        return
+    fi
+
+    echo -e "${YELLOW}你也可以在 CC Switch 中手动处理：编辑 Claude 供应商 → 编辑通用配置 → 从编辑内容提取 → 保存，并确认要切换的供应商勾选“写入通用配置”。${NC}"
+}
+
+ccswitch_read_consent() {
+    if [ -f "$CCSWITCH_CONSENT_FILE" ]; then
+        tr -d '\r\n' < "$CCSWITCH_CONSENT_FILE"
+    fi
+}
+
+ccswitch_write_consent() {
+    local value="$1"
+    mkdir -p "$(dirname "$CCSWITCH_CONSENT_FILE")" 2>/dev/null || return 0
+    printf "%s\n" "$value" > "$CCSWITCH_CONSENT_FILE" 2>/dev/null || true
+}
+
+ccswitch_prompt_for_consent() {
+    local answer
+
+    if [ "$UPDATE_ONLY" = true ] || [ "$SKIP_BANNER" = "1" ]; then
+        return 2
+    fi
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        return 2
+    fi
+
+    {
+        echo ""
+        echo -e "${YELLOW}检测到你在使用 CC Switch。它切换供应商时会重写 Claude 的 settings.json，可能覆盖中文插件设置。${NC}"
+        echo "要不要现在把中文插件设置同步到 CC Switch 的“通用配置”，并让 Claude 供应商切换时写入通用配置？"
+        echo "同意后，之后切换供应商也会保留中文；不会修改 API Key、模型或供应商配置。"
+        printf "输入 Y 帮我同步，或 n 自己处理 [Y/n]: "
+    } > /dev/tty
+
+    read -r answer < /dev/tty || answer=""
+    case "$answer" in
+        ""|[Yy]|[Yy][Ee][Ss]|是|好|同意)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ccswitch_config_status() {
+    local current_file="$1"
+    local overlay_file="$2"
+
+    ZH_CN_CCSWITCH_CURRENT_FILE="$current_file" \
+    ZH_CN_CCSWITCH_OVERLAY_FILE="$overlay_file" \
+    node <<'NODE' 2>/dev/null || printf "invalid"
+const fs = require("fs");
+
+function readJson(file, fallback) {
+  const raw = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+  if (!raw.trim()) return fallback;
+  return JSON.parse(raw);
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function spinnerVerbCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (!isPlainObject(value)) return 0;
+  if (Array.isArray(value.verbs)) return value.verbs.length;
+  return Object.keys(value).length;
+}
+
+function spinnerTipCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (!isPlainObject(value)) return 0;
+  if (Array.isArray(value.tips)) return value.tips.length;
+  return 0;
+}
+
+const current = readJson(process.env.ZH_CN_CCSWITCH_CURRENT_FILE, {});
+readJson(process.env.ZH_CN_CCSWITCH_OVERLAY_FILE, {});
+
+if (!isPlainObject(current)) {
+  process.stdout.write("invalid");
+  process.exit(0);
+}
+
+const complete =
+  current.language === "Chinese" &&
+  current.spinnerTipsEnabled === true &&
+  spinnerVerbCount(current.spinnerVerbs) >= 100 &&
+  spinnerTipCount(current.spinnerTipsOverride) >= 40;
+
+process.stdout.write(complete ? "ok" : "needs-sync");
+NODE
+}
+
+ccswitch_build_merged_config() {
+    local current_file="$1"
+    local overlay_file="$2"
+    local output_file="$3"
+
+    ZH_CN_CCSWITCH_CURRENT_FILE="$current_file" \
+    ZH_CN_CCSWITCH_OVERLAY_FILE="$overlay_file" \
+    ZH_CN_CCSWITCH_OUTPUT_FILE="$output_file" \
+    node <<'NODE'
+const fs = require("fs");
+
+function readJson(file, fallback) {
+  const raw = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+  if (!raw.trim()) return fallback;
+  return JSON.parse(raw);
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepMerge(base, override) {
+  const result = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (isPlainObject(result[key]) && isPlainObject(value)) {
+      result[key] = deepMerge(result[key], value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+const current = readJson(process.env.ZH_CN_CCSWITCH_CURRENT_FILE, {});
+const overlay = readJson(process.env.ZH_CN_CCSWITCH_OVERLAY_FILE, {});
+
+if (!isPlainObject(current) || !isPlainObject(overlay)) {
+  process.exit(2);
+}
+
+fs.writeFileSync(
+  process.env.ZH_CN_CCSWITCH_OUTPUT_FILE,
+  `${JSON.stringify(deepMerge(current, overlay), null, 2)}\n`
+);
+NODE
+}
+
+ccswitch_build_provider_meta_updates() {
+    local providers_file="$1"
+    local output_file="$2"
+
+    ZH_CN_CCSWITCH_PROVIDERS_FILE="$providers_file" \
+    ZH_CN_CCSWITCH_PROVIDER_SQL_FILE="$output_file" \
+    node <<'NODE'
+const fs = require("fs");
+
+function fromHex(hex) {
+  return Buffer.from(hex || "", "hex").toString("utf8");
+}
+
+function sqlString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+const raw = fs.readFileSync(process.env.ZH_CN_CCSWITCH_PROVIDERS_FILE, "utf8").replace(/\r/g, "");
+const lines = raw.split("\n").filter(Boolean);
+const updates = [];
+let changed = 0;
+let skipped = 0;
+
+for (const line of lines) {
+  const tab = line.indexOf("\t");
+  if (tab < 0) {
+    skipped += 1;
+    continue;
+  }
+
+  const id = fromHex(line.slice(0, tab));
+  const metaText = fromHex(line.slice(tab + 1).trim());
+  let meta;
+
+  try {
+    meta = metaText.trim() ? JSON.parse(metaText) : {};
+  } catch (_) {
+    skipped += 1;
+    continue;
+  }
+
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    skipped += 1;
+    continue;
+  }
+
+  if (meta.commonConfigEnabled !== true) {
+    changed += 1;
+  }
+  meta.commonConfigEnabled = true;
+
+  updates.push(
+    `update providers set meta=${sqlString(JSON.stringify(meta))} where id=${sqlString(id)} and app_type='claude';`
+  );
+}
+
+fs.writeFileSync(process.env.ZH_CN_CCSWITCH_PROVIDER_SQL_FILE, updates.join("\n") + (updates.length ? "\n" : ""));
+process.stdout.write(`${changed} ${lines.length} ${skipped}`);
+NODE
+}
+
+sync_ccswitch_common_config() {
+    local overlay_content="$1"
+    local db_file="$HOME/.cc-switch/cc-switch.db"
+    local consent status answer consent_source
+    local current_file overlay_file merged_file providers_file provider_sql_file
+    local backup_file escaped_merged provider_update_sql provider_sync_summary
+    local provider_sync_changed provider_sync_total provider_sync_skipped provider_sync_rest
+
+    [ -f "$db_file" ] || return 0
+
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        if [ "$UPDATE_ONLY" != true ] && [ "$SKIP_BANNER" != "1" ]; then
+            echo -e "${YELLOW}检测到 CC Switch，但未找到 sqlite3，无法自动检查/同步通用配置。${NC}"
+            ccswitch_manual_steps
+        fi
+        return 0
+    fi
+
+    current_file="$(mktemp "${TMPDIR:-/tmp}/cczh-ccswitch-current.XXXXXX")"
+    overlay_file="$(mktemp "${TMPDIR:-/tmp}/cczh-ccswitch-overlay.XXXXXX")"
+    merged_file="$(mktemp "${TMPDIR:-/tmp}/cczh-ccswitch-merged.XXXXXX")"
+    providers_file="$(mktemp "${TMPDIR:-/tmp}/cczh-ccswitch-providers.XXXXXX")"
+    provider_sql_file="$(mktemp "${TMPDIR:-/tmp}/cczh-ccswitch-providers-sql.XXXXXX")"
+    printf "%s" "$overlay_content" > "$overlay_file"
+
+    if ! sqlite3 "$db_file" "select value from settings where key='common_config_claude';" > "$current_file" 2>/dev/null; then
+        rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+        if [ "$UPDATE_ONLY" != true ] && [ "$SKIP_BANNER" != "1" ]; then
+            echo -e "${YELLOW}检测到 CC Switch，但无法读取通用配置表，已跳过自动同步。${NC}"
+        fi
+        return 0
+    fi
+
+    status="$(ccswitch_config_status "$current_file" "$overlay_file")"
+    if [ "$status" = "ok" ]; then
+        if [ "$(sqlite3 "$db_file" "select count(*) from sqlite_master where type='table' and name='providers';" 2>/dev/null)" != "1" ] || \
+            ! sqlite3 "$db_file" "select hex(id) || char(9) || hex(meta) from providers where app_type='claude';" > "$providers_file" 2>/dev/null || \
+            [ ! -s "$providers_file" ]; then
+            rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+            return 0
+        fi
+        provider_sync_summary="$(ccswitch_build_provider_meta_updates "$providers_file" "$provider_sql_file" 2>/dev/null || true)"
+        provider_sync_changed="${provider_sync_summary%% *}"
+        if [ "${provider_sync_changed:-0}" = "0" ]; then
+            rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+            return 0
+        fi
+        status="needs-sync"
+    fi
+    if [ "$status" != "needs-sync" ]; then
+        rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+        if [ "$UPDATE_ONLY" != true ] && [ "$SKIP_BANNER" != "1" ]; then
+            echo -e "${YELLOW}检测到 CC Switch，但 common_config_claude 不是有效 JSON，已跳过自动同步。${NC}"
+            ccswitch_manual_steps
+        fi
+        return 0
+    fi
+
+    case "$CCSWITCH_SYNC_CHOICE" in
+        1|true|TRUE|yes|YES|y|Y)
+            consent="allow"
+            consent_source="env"
+            ;;
+        0|false|FALSE|no|NO|n|N)
+            consent="manual"
+            consent_source="env"
+            ;;
+        *)
+            consent="$(ccswitch_read_consent)"
+            [ -n "$consent" ] && consent_source="stored"
+            ;;
+    esac
+
+    if [ "$consent" != "allow" ] && [ "$consent" != "manual" ]; then
+        set +e
+        ccswitch_prompt_for_consent
+        answer="$?"
+        set -e
+        if [ "$answer" = "0" ]; then
+            consent="allow"
+            consent_source="prompt"
+            ccswitch_write_consent "allow"
+        elif [ "$answer" = "1" ]; then
+            consent="manual"
+            consent_source="prompt"
+            ccswitch_write_consent "manual"
+        else
+            rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+            if [ "$UPDATE_ONLY" != true ] && [ "$SKIP_BANNER" != "1" ]; then
+                echo -e "${YELLOW}检测到 CC Switch 通用配置缺少中文设置；当前不是交互式安装，未自动修改。${NC}"
+                echo -e "${YELLOW}如需授权自动同步，可运行：ZH_CN_CCSWITCH_SYNC=1 ./install.sh${NC}"
+                ccswitch_manual_steps
+            fi
+            return 0
+        fi
+    fi
+
+    if [ "$consent" != "allow" ]; then
+        rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+        if [ "$consent_source" = "prompt" ] && [ "$SKIP_BANNER" != "1" ]; then
+            ccswitch_manual_steps
+        fi
+        return 0
+    fi
+
+    ccswitch_write_consent "allow"
+    if ! ccswitch_build_merged_config "$current_file" "$overlay_file" "$merged_file" >/dev/null 2>&1; then
+        rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+        if [ "$SKIP_BANNER" != "1" ]; then
+            echo -e "${YELLOW}CC Switch 通用配置合并失败，已跳过自动同步。${NC}"
+            ccswitch_manual_steps
+        fi
+        return 0
+    fi
+
+    provider_update_sql=""
+    provider_sync_summary=""
+    if [ "$(sqlite3 "$db_file" "select count(*) from sqlite_master where type='table' and name='providers';" 2>/dev/null)" = "1" ]; then
+        if sqlite3 "$db_file" "select hex(id) || char(9) || hex(meta) from providers where app_type='claude';" > "$providers_file" 2>/dev/null; then
+            provider_sync_summary="$(ccswitch_build_provider_meta_updates "$providers_file" "$provider_sql_file" 2>/dev/null || true)"
+            if [ -s "$provider_sql_file" ]; then
+                provider_update_sql="$(cat "$provider_sql_file")"
+            fi
+        fi
+    fi
+
+    backup_file="${db_file}.zh-cn-backup.$(date +%Y%m%d%H%M%S)"
+    cp "$db_file" "$backup_file" 2>/dev/null || backup_file=""
+
+    escaped_merged="${merged_file//\'/\'\'}"
+    if sqlite3 "$db_file" "begin immediate; insert or replace into settings(key,value) values('common_config_claude', CAST(readfile('$escaped_merged') AS TEXT)); delete from settings where key='common_config_claude_cleared'; ${provider_update_sql} commit;" >/dev/null 2>&1; then
+        if [ "$SKIP_BANNER" != "1" ]; then
+            echo -e "${GREEN}已在用户同意后同步 CC Switch 通用配置${NC}"
+            if [ -n "$provider_sync_summary" ]; then
+                provider_sync_changed="${provider_sync_summary%% *}"
+                provider_sync_rest="${provider_sync_summary#* }"
+                provider_sync_total="${provider_sync_rest%% *}"
+                provider_sync_skipped="${provider_sync_rest#* }"
+                if [ "${provider_sync_total:-0}" != "0" ]; then
+                    echo -e "${GREEN}已让 CC Switch 的 Claude 供应商切换时写入通用配置（${provider_sync_changed}/${provider_sync_total} 个需要更新）${NC}"
+                fi
+                if [ "${provider_sync_skipped:-0}" != "0" ]; then
+                    echo -e "${YELLOW}有 ${provider_sync_skipped} 个 Claude 供应商 meta 不是有效 JSON，已跳过。${NC}"
+                fi
+            fi
+            [ -n "$backup_file" ] && echo -e "${GREEN}已备份 CC Switch 数据库 → ${backup_file}${NC}"
+        fi
+    else
+        if [ "$SKIP_BANNER" != "1" ]; then
+            echo -e "${YELLOW}CC Switch 数据库当前无法写入，已跳过自动同步。${NC}"
+            [ -n "$backup_file" ] && echo -e "${YELLOW}同步前备份已保留：${backup_file}${NC}"
+            ccswitch_manual_steps
+        fi
+    fi
+
+    rm -f "$current_file" "$overlay_file" "$merged_file" "$providers_file" "$provider_sql_file" 2>/dev/null || true
+}
+
 merge_settings() {
     local overlay_content merged
 
@@ -358,6 +823,8 @@ fs.writeFileSync(process.env.ZH_CN_SETTINGS, JSON.stringify(merged, null, 2) + '
     if [ -n "${PLUGIN_DST:-}" ] && [ -d "$PLUGIN_DST" ]; then
         echo "$overlay_content" > "$PLUGIN_DST/.settings-overlay-cache.json"
     fi
+
+    sync_ccswitch_common_config "$overlay_content"
 }
 
 sync_plugin_payload() {
@@ -686,14 +1153,20 @@ patch_native_binary() {
     local binary_path="$1"
     local tmp_js="${TMPDIR:-/tmp}/claude-zh-cn-extract.$$.js"
     local backup_path="${binary_path}.zh-cn-backup"
-    local current_version backup_version
+    local current_version backup_version patch_mode platform
 
     echo ""
     echo -e "${BLUE}检测到官方安装器（原生二进制）${NC}"
     echo -e "  二进制路径: ${binary_path}"
 
     current_version="$(native_binary_version "$binary_path")"
-    if ! is_supported_native_version "$current_version"; then
+    platform="$(native_platform)"
+    patch_mode="verified"
+    if is_supported_native_version "$current_version" "$platform"; then
+        patch_mode="verified"
+    elif can_try_provisional_native_version "$current_version" "$platform"; then
+        patch_mode="provisional"
+    else
         echo -e "${YELLOW}当前原生二进制版本 ${current_version:-unknown} 暂不支持 CLI Patch，已跳过 CLI Patch（安全退出）${NC}"
         echo -e "  macOS native 已验证窗口：$(native_support_summary)"
         echo -e "  如需稳定 CLI 中文化，请使用 npm 安装 Claude Code 2.1.112"
@@ -701,7 +1174,11 @@ patch_native_binary() {
         return
     fi
 
-    echo -e "  版本: ${current_version}（experimental）"
+    if [ "$patch_mode" = "provisional" ]; then
+        echo -e "  版本: ${current_version}（未纳入已发布支持窗口，安装时本机自验证）"
+    else
+        echo -e "  版本: ${current_version}（experimental）"
+    fi
 
     local dep_status
     dep_status="$(node "$PLUGIN_SRC/bun-binary-io.js" check-deps 2>/dev/null || echo "missing")"
@@ -733,6 +1210,9 @@ patch_native_binary() {
         }
     fi
 
+    local source_hash
+    source_hash="$(native_binary_hash "$binary_path")"
+
     node "$PLUGIN_SRC/bun-binary-io.js" extract "$binary_path" "$tmp_js" || {
         echo -e "${RED}提取 JS 失败${NC}"
         CLI_PATCH_STATUS_SUMMARY="已跳过（原生二进制提取失败）"
@@ -751,13 +1231,34 @@ patch_native_binary() {
             rm -f "$tmp_js"
             return
         }
-        echo -e "${GREEN}已 patch 原生二进制（${patch_count} 处硬编码文字）${NC}"
-        CLI_PATCH_STATUS_SUMMARY="官方安装器 native 中文化（${patch_count} 处硬编码文字）"
+        if [ "$patch_mode" = "provisional" ]; then
+            local verified_version
+            echo -e "  正在运行 --version 做本机自验证..."
+            verified_version="$(native_binary_version_from_execution "$binary_path")"
+            if [ "${verified_version:-}" != "${current_version:-}" ]; then
+                echo -e "${RED}本机自验证失败，正在从备份恢复...${NC}"
+                cp "$backup_path" "$binary_path" 2>/dev/null || true
+                CLI_PATCH_STATUS_SUMMARY="已跳过（原生二进制本机自验证失败）"
+                rm -f "$tmp_js"
+                return
+            fi
+            echo -e "${GREEN}本机自验证通过，已 patch 原生二进制（${patch_count} 处硬编码文字）${NC}"
+            CLI_PATCH_STATUS_SUMMARY="官方安装器 native 本机自验证中文化（${patch_count} 处硬编码文字，未纳入已发布支持窗口）"
+        else
+            echo -e "${GREEN}已 patch 原生二进制（${patch_count} 处硬编码文字）${NC}"
+            CLI_PATCH_STATUS_SUMMARY="官方安装器 native 中文化（${patch_count} 处硬编码文字）"
+        fi
         CLI_PATCH_STATUS_OK=true
     else
         echo -e "${YELLOW}未找到需要 patch 的内容${NC}"
-        CLI_PATCH_STATUS_SUMMARY="原生二进制无新增改动（可能已是最新状态）"
-        CLI_PATCH_STATUS_OK=true
+        if [ "$patch_mode" = "provisional" ]; then
+            CLI_PATCH_STATUS_SUMMARY="已跳过（原生二进制本机自验证未找到可 patch 内容）"
+            rm -f "$tmp_js"
+            return
+        else
+            CLI_PATCH_STATUS_SUMMARY="原生二进制无新增改动（可能已是最新状态）"
+            CLI_PATCH_STATUS_OK=true
+        fi
     fi
 
     rm -f "$tmp_js"
@@ -767,7 +1268,11 @@ patch_native_binary() {
     final_hash="$(native_binary_hash "$binary_path")"
     patch_revision=$(compute_patch_revision "$PLUGIN_DST" 2>/dev/null || true)
     if [ -n "${patch_revision:-}" ] && [ -n "${current_version:-}" ]; then
-        echo "native|${current_version}|${final_hash:-unknown}|${patch_revision}" > "$MARKER_FILE"
+        if [ "$patch_mode" = "provisional" ]; then
+            echo "native|${current_version}|${final_hash:-unknown}|${patch_revision}|provisional|${platform:-unknown}|${source_hash:-unknown}" > "$MARKER_FILE"
+        else
+            echo "native|${current_version}|${final_hash:-unknown}|${patch_revision}" > "$MARKER_FILE"
+        fi
     fi
 }
 
